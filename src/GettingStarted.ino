@@ -21,9 +21,10 @@ const char* role_friendly_name[] = { "invalid", "Ping out", "Pong back"};
 role_e role = role_ping_out;
 
 // Ip Configuration
-uint8_t destIp[] = {172, 16, 5, 5};
 uint8_t srcIp[] = {172, 16, 5, 8};
+uint8_t destIp[] = {172, 16, 5, 5};
 uint16_t  srcPort = 234;
+uint16_t  destPort = 300;
 
 /*
  * IP Header
@@ -194,7 +195,6 @@ bool NetIpRcv(void* data, uint16_t* len){
 
   if(pIpPkt.ipHdr.dest_addr == *((uint32_t*)srcIp)){
     printf("NetIpRcv: IP Pass\n\r");
-
     memcpy(data, pIpPkt.data, pIpPkt.ipHdr.length);
     *len = pIpPkt.ipHdr.length;
 
@@ -219,14 +219,14 @@ void fillIp(uint32_t* destAddr, uint8_t* ipAddr){
 
 
 
-bool UdpSend(uint16_t dest_port, void* data, uint16_t len){
+bool UdpSnd(uint16_t dest_port, void* data, uint16_t len){
   UdpPkt udpPacket;
 
   memcpy(&udpPacket.data, data, len);
 
   udpPacket.dest_port = dest_port;
   udpPacket.src_port = srcPort;
-
+  udpPacket.length = len;
   udpPacket.checksum = 0;
 
   bool ok;
@@ -249,7 +249,9 @@ bool UdpRcv(void* data, uint16_t* len){
 
   if(ok){
     if( udpPacket.dest_port == srcPort ){
-      memcpy(data, &udpPacket.data, udpPacket.length);
+      printf("UdpRcv: Port pass\n\r");
+      //printf("%d\n\r",udpPacket.length);
+      memcpy(data, udpPacket.data, udpPacket.length);
       *len = udpPacket.length;
       return true;
     } else {
@@ -270,11 +272,11 @@ void loop(void)
   // Ping out role.
   if (role == role_ping_out)
   {
-    char stringToSend[] = "batata";
+    char stringToSend[] = "oi";
 
     printf("Sending Message: %s\n\r", stringToSend);
 
-    bool ok = NetIpSnd((uint8_t*)stringToSend, sizeof(stringToSend));
+    bool ok = UdpSnd(destPort, (uint8_t*)stringToSend, sizeof(stringToSend));
 
     if (ok)
       printf("Send ok...\n\r");
@@ -283,7 +285,7 @@ void loop(void)
 
     char stringReceived[20];
     uint16_t stringSize;
-    ok = NetIpRcv(stringReceived, &stringSize);
+    ok = UdpRcv(stringReceived, &stringSize);
 
     if(ok)
       printf("Message Received: %s\n\r", stringReceived);
@@ -300,18 +302,18 @@ void loop(void)
   {
     char stringReceived[20];
     uint16_t stringSize;
-    while(!(NetIpRcv(stringReceived, &stringSize)));
+    while(!(UdpRcv(stringReceived, &stringSize)));
     printf("Message Received: %s\n\r", stringReceived);
 
     // Delay just a little bit to let the other unit
   	// make the transition to receiver
   	delay(20);
 
-    char stringToSend[] = "resp";
+    char stringToSend[] = "awn";
 
     printf("Sending Message: %s\n\r", stringToSend);
 
-    bool ok = NetIpSnd(stringToSend, sizeof(stringToSend));
+    bool ok = UdpSnd(destPort, stringToSend, sizeof(stringToSend));
 
     if (ok)
       printf("Send ok...\n\r");
