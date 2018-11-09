@@ -21,10 +21,10 @@ const char* role_friendly_name[] = { "invalid", "Ping out", "Pong back"};
 role_e role = role_ping_out;
 
 // Ip Configuration
-uint8_t srcIp[] = {172, 16, 5, 8};
-uint8_t destIp[] = {172, 16, 5, 5};
-uint16_t  srcPort = 234;
-uint16_t  destPort = 300;
+uint8_t srcIp[] = {172, 16, 5, 5};
+uint8_t destIp[] = {172, 16, 5, 8};
+uint16_t  srcPort = 300;
+uint16_t  destPort = 234;
 
 /*
  * IP Header
@@ -92,7 +92,7 @@ void setup(void)
 
   //if ( role == role_ping_out )
   {
-    //radio.openWritingPipe(pipes[0]);
+    radio.openWritingPipe(pipes[0]);
     radio.openReadingPipe(1,pipes[1]);
   }
   //else
@@ -154,7 +154,7 @@ bool NetIpRcv(void* data, uint16_t* len){
   // Describe the results
   if ( timeout )
   {
-    printf("NetIpRcv: timeout\n\r");
+    //printf("NetIpRcv: timeout\n\r");
     return false;
   }
   else
@@ -163,7 +163,6 @@ bool NetIpRcv(void* data, uint16_t* len){
     bool ok = radio.read(&pIpPkt, sizeof(pIpPkt) );
 
     if(!ok){
-      printf("NetIpRcv: not ok\n\r");
       return false;
     }
   }
@@ -181,7 +180,7 @@ bool NetIpRcv(void* data, uint16_t* len){
   pIpPkt.ipHdr.checksum = 0;
 
   //Compute checksum and compare with received value.
-  if (checksum != ::checksum(&pIpPkt.ipHdr, sizeof(pIpPkt.ipHdr)))
+  if ((checksum != ::checksum(&pIpPkt.ipHdr, sizeof(pIpPkt.ipHdr))) && checksum != 0)
   {
     printf("NetIpRcv: bad checksum\n\r");
     return false; //Bad checksum
@@ -259,7 +258,7 @@ bool UdpRcv(void* data, uint16_t* len){
       return false;
     }
   } else {
-    printf("UdpRcv: Not ok\n\r");
+    //printf("UdpRcv: Not ok\n\r");
     return false;
   }
 
