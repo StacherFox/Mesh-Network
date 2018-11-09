@@ -21,8 +21,10 @@ const char* role_friendly_name[] = { "invalid", "Ping out", "Pong back"};
 role_e role = role_ping_out;
 
 // Ip Configuration
-uint8_t destIp[] = {172, 16, 5, 5};
-uint8_t srcIp[] = {172, 16, 5, 8};
+uint8_t srcIp[] = {172, 16, 5, 5};
+uint8_t destIp[] = {172, 16, 5, 8};
+uint16_t  srcPort = 300;
+uint16_t  destPort = 234;
 
 /*
  * IP Header
@@ -30,6 +32,7 @@ uint8_t srcIp[] = {172, 16, 5, 8};
  #define IP_VER_HLEN     0x45
  #define IP_HEADER_LEN   sizeof(NetIpHdr)
  #define IP_DATA_LEN     (MTU - IP_HEADER_LEN)
+ #define UDP_DATA_LEN    (IP_DATA_LEN - 8)
 
 typedef struct
 {
@@ -57,6 +60,20 @@ typedef struct
 // Global NetIpPkt
 NetIpPkt ipPacket;
 
+/*
+* UDP Packet
+*/
+typedef struct
+{
+  uint16_t src_port;
+  uint16_t dest_port;
+  uint16_t length;
+  uint16_t checksum;
+  uint8_t  data[UDP_DATA_LEN];
+} UdpPkt;
+
+// Global UdpPkt
+UdpPkt udpPacket;
 
 void setup(void)
 {
@@ -75,7 +92,7 @@ void setup(void)
 
   //if ( role == role_ping_out )
   {
-    //radio.openWritingPipe(pipes[0]);
+    radio.openWritingPipe(pipes[0]);
     radio.openReadingPipe(1,pipes[1]);
   }
   //else
@@ -92,29 +109,37 @@ void setup(void)
 }
 
 
-bool NetIpSnd(NetIpPkt * pIpPkt, uint16_t len) {
+bool NetIpSnd(void* data, uint16_t len) {
+  NetIpPkt pIpPkt;
   uint16_t ident;
   ident = 1;
 
   // First, stop listening so we can talk.
   radio.stopListening();
 
-  pIpPkt->ipHdr.ver_hlen = IP_VER_HLEN;
-  pIpPkt->ipHdr.service = 0x00;
-  pIpPkt->ipHdr.length = len;
-  pIpPkt->ipHdr.ident = ident;
-  pIpPkt->ipHdr.fragment = 0x00;
-  pIpPkt->ipHdr.timetolive = 0x10;
+  memcpy(pIpPkt.data, data, len);
 
-  pIpPkt->ipHdr.checksum = checksum(&(pIpPkt->ipHdr), sizeof(pIpPkt->ipHdr));
+  fillIp(&pIpPkt.ipHdr.dest_addr, destIp);
+  fillIp(&pIpPkt.ipHdr.src_addr, srcIp);
 
-  bool ok = radio.write(pIpPkt, sizeof(NetIpPkt));
+  pIpPkt.ipHdr.ver_hlen = IP_VER_HLEN;
+  pIpPkt.ipHdr.service = 0x00;
+  pIpPkt.ipHdr.length = len;
+  pIpPkt.ipHdr.ident = ident;
+  pIpPkt.ipHdr.fragment = 0x00;
+  pIpPkt.ipHdr.timetolive = 0x10;
+  pIpPkt.ipHdr.checksum = 0;
+
+  pIpPkt.ipHdr.checksum = checksum(&(pIpPkt.ipHdr), sizeof(pIpPkt.ipHdr));
+
+  bool ok = radio.write(&pIpPkt, sizeof(pIpPkt));
 
   return ok;
 }
 
 
-bool NetIpRcv(NetIpPkt * pIpPkt){
+bool NetIpRcv(void* data, uint16_t* len){
+  NetIpPkt pIpPkt;
   uint16_t checksum;
 
   radio.startListening();
@@ -129,43 +154,33 @@ bool NetIpRcv(NetIpPkt * pIpPkt){
   // Describe the results
   if ( timeout )
   {
+    //printf("NetIpRcv: timeout\n\r");
     return false;
-    printf("NetIpRcv: timeout\n\r");
   }
   else
   {
     // Grab the response, compare, and send to debugging spew
-    bool ok = radio.read(pIpPkt, sizeof(NetIpPkt) );
+    bool ok = radio.read(&pIpPkt, sizeof(pIpPkt) );
 
     if(!ok){
-      printf("NetIpRcv: not ok\n\r");
       return false;
     }
   }
 
-
-  /*
-   * Check IP header version and length.
-   */
-  if (pIpPkt->ipHdr.ver_hlen != IP_VER_HLEN)
+  //Check IP header version and length.
+  if (pIpPkt.ipHdr.ver_hlen != IP_VER_HLEN)
   {
     printf("NetIpRcv: Ip version error\n\r");
-    /*
-     * Unsupported header version or length.
-     */
-      return false;
+    //Unsupported header version or length.
+    return false;
   }
 
-  /*
-   * Move the IP header checksum out of the header.
-   */
-  checksum = pIpPkt->ipHdr.checksum;
-  pIpPkt->ipHdr.checksum = 0;
+  //Move the IP header checksum out of the header.
+  checksum = pIpPkt.ipHdr.checksum;
+  pIpPkt.ipHdr.checksum = 0;
 
-  /*
-   * Compute checksum and compare with received value.
-   */
-  if (checksum != ::checksum(&pIpPkt->ipHdr, sizeof(pIpPkt->ipHdr)))
+  //Compute checksum and compare with received value.
+  if ((checksum != ::checksum(&pIpPkt.ipHdr, sizeof(pIpPkt.ipHdr))) && checksum != 0)
   {
     printf("NetIpRcv: bad checksum\n\r");
     return false; //Bad checksum
@@ -173,12 +188,15 @@ bool NetIpRcv(NetIpPkt * pIpPkt){
 
   printf("NetIpRcv: Packet Received:\n\r");
   printf("NetIpRcv: Source Ip: ");
-  printIp(&pIpPkt->ipHdr.src_addr);
+  printIp(&pIpPkt.ipHdr.src_addr);
   printf("NetIpRcv: Destination Ip: ");
-  printIp(&pIpPkt->ipHdr.dest_addr);
+  printIp(&pIpPkt.ipHdr.dest_addr);
 
-  if(pIpPkt->ipHdr.dest_addr == *((uint32_t*)srcIp)){
+  if(pIpPkt.ipHdr.dest_addr == *((uint32_t*)srcIp)){
     printf("NetIpRcv: IP Pass\n\r");
+    memcpy(data, pIpPkt.data, pIpPkt.ipHdr.length);
+    *len = pIpPkt.ipHdr.length;
+
     return true;
   } else {
     printf("NetIpRcv: IP Wrong\n\r");
@@ -198,31 +216,78 @@ void fillIp(uint32_t* destAddr, uint8_t* ipAddr){
 }
 
 
+
+
+bool UdpSnd(uint16_t dest_port, void* data, uint16_t len){
+  UdpPkt udpPacket;
+
+  memcpy(&udpPacket.data, data, len);
+
+  udpPacket.dest_port = dest_port;
+  udpPacket.src_port = srcPort;
+  udpPacket.length = len;
+  udpPacket.checksum = 0;
+
+  bool ok;
+  ok = NetIpSnd((void*)&udpPacket, sizeof(udpPacket));
+
+  if(ok){
+    return true;
+  } else {
+    printf("UdpSend: Not ok\n\r");
+    return false;
+  }
+}
+
+bool UdpRcv(void* data, uint16_t* len){
+  UdpPkt udpPacket;
+  uint16_t dataSize;
+
+  bool ok;
+  ok = NetIpRcv((void*)&udpPacket, &dataSize);
+
+  if(ok){
+    if( udpPacket.dest_port == srcPort ){
+      printf("UdpRcv: Port pass\n\r");
+      //printf("%d\n\r",udpPacket.length);
+      memcpy(data, udpPacket.data, udpPacket.length);
+      *len = udpPacket.length;
+      return true;
+    } else {
+      printf("UdpRcv: Port wrong\n\r");
+      return false;
+    }
+  } else {
+    //printf("UdpRcv: Not ok\n\r");
+    return false;
+  }
+
+  return false;
+}
+
 void loop(void)
 {
 
   // Ping out role.
   if (role == role_ping_out)
   {
-    fillIp(&ipPacket.ipHdr.dest_addr, destIp);
-    fillIp(&ipPacket.ipHdr.src_addr, srcIp);
-
-    char stringToSend[] = "batata";
-    strcpy(ipPacket.data, stringToSend);
+    char stringToSend[] = "oi";
 
     printf("Sending Message: %s\n\r", stringToSend);
 
-    bool ok = NetIpSnd(&ipPacket, sizeof(stringToSend));
+    bool ok = UdpSnd(destPort, (uint8_t*)stringToSend, sizeof(stringToSend));
 
     if (ok)
       printf("Send ok...\n\r");
     else
       printf("Send failed.\n\r");
 
-    ok = NetIpRcv(&ipPacket);
+    char stringReceived[20];
+    uint16_t stringSize;
+    ok = UdpRcv(stringReceived, &stringSize);
 
     if(ok)
-      printf("Message Received: %s\n\r", ipPacket.data);
+      printf("Message Received: %s\n\r", stringReceived);
     else
       printf("Response Not Received\n\r");
 
@@ -234,22 +299,20 @@ void loop(void)
   // Pong back role.  Receive each packet, dump it out, and send it back
   if ( role == role_pong_back )
   {
-    while(!(NetIpRcv(&ipPacket)));
-    printf("Message Received: %s\n\r", ipPacket.data);
+    char stringReceived[20];
+    uint16_t stringSize;
+    while(!(UdpRcv(stringReceived, &stringSize)));
+    printf("Message Received: %s\n\r", stringReceived);
 
     // Delay just a little bit to let the other unit
   	// make the transition to receiver
   	delay(20);
 
-    fillIp(&ipPacket.ipHdr.dest_addr, destIp);
-    fillIp(&ipPacket.ipHdr.src_addr, srcIp);
-
-    char stringToSend[] = "resp";
-    strcpy(ipPacket.data, stringToSend);
+    char stringToSend[] = "awn";
 
     printf("Sending Message: %s\n\r", stringToSend);
 
-    bool ok = NetIpSnd(&ipPacket, sizeof(stringToSend));
+    bool ok = UdpSnd(destPort, stringToSend, sizeof(stringToSend));
 
     if (ok)
       printf("Send ok...\n\r");
@@ -292,7 +355,7 @@ uint16_t checksum(void *addr, int count)
      */
 
     register uint32_t sum = 0;
-    uint16_t * ptr = addr;
+    uint16_t * ptr = (uint16_t*)addr;
 
     while( count > 1 )  {
         /*  This is the inner loop */
