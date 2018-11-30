@@ -5,6 +5,8 @@
 
 #define MTU 32
 
+//#define CLIENT_NUMBER_1
+
 // Set up nRF24L01 radio on SPI bus plus pins 9 & 10
 RF24 radio(9,10);
 
@@ -17,14 +19,42 @@ typedef enum { role_ping_out = 1, role_pong_back } role_e;
 // The debug-friendly names of those roles
 const char* role_friendly_name[] = { "invalid", "Ping out", "Pong back"};
 
-// The role of the current running sketch
-role_e role = role_ping_out;
-
 // Ip Configuration
-uint8_t srcIp[] = {172, 16, 5, 5};
-uint8_t destIp[] = {172, 16, 5, 8};
+#ifdef CLIENT_NUMBER_1
+#define ID_SEED 11000
+role_e role = role_ping_out;
+uint8_t srcIp[] = {172, 16, 5, 1};
+uint8_t destIp[] = {172, 16, 5, 3};
 uint16_t  srcPort = 300;
-uint16_t  destPort = 234;
+uint16_t  destPort = 500;
+#endif
+
+#ifdef CLIENT_NUMBER_2
+#define ID_SEED 12000
+role_e role = role_pong_back;
+uint8_t srcIp[] = {172, 16, 5, 2};
+uint8_t destIp[] = {172, 16, 5, 1};
+uint16_t  srcPort = 400;
+uint16_t  destPort = 300;
+#endif
+
+#ifdef CLIENT_NUMBER_3
+#define ID_SEED 13000
+role_e role = role_pong_back;
+uint8_t srcIp[] = {172, 16, 5, 3};
+uint8_t destIp[] = {172, 16, 5, 2};
+uint16_t  srcPort = 500;
+uint16_t  destPort = 400;
+#endif
+
+#ifdef CLIENT_NUMBER_4
+#define ID_SEED 14000
+role_e role = role_pong_back;
+uint8_t srcIp[] = {172, 16, 5, 3};
+uint8_t destIp[] = {172, 16, 5, 2};
+uint16_t  srcPort = 500;
+uint16_t  destPort = 400;
+#endif
 
 /*
  * IP Header
@@ -72,8 +102,8 @@ typedef struct
   uint8_t  data[UDP_DATA_LEN];
 } UdpPkt;
 
-// Global UdpPkt
-UdpPkt udpPacket;
+
+uint16_t id = ID_SEED;
 
 void setup(void)
 {
@@ -86,19 +116,19 @@ void setup(void)
 
   // Setup and configure rf radio
   radio.begin();
-
+  radio.setAutoAck(false);
   // optionally, increase the delay between retries & # of retries
   radio.setRetries(15,15);
 
-  //if ( role == role_ping_out )
+  if ( role == role_ping_out )
   {
     radio.openWritingPipe(pipes[0]);
     radio.openReadingPipe(1,pipes[1]);
   }
-  //else
+  else
   {
-    //radio.openWritingPipe(pipes[1]);
-    //radio.openReadingPipe(1,pipes[0]);
+    radio.openWritingPipe(pipes[1]);
+    radio.openReadingPipe(1,pipes[0]);
   }
 
   // Start listening
@@ -108,11 +138,21 @@ void setup(void)
   radio.printDetails();
 }
 
+bool NetIpSnd(NetIpPkt pIpPkt) {
+  // First, stop listening so we can talk.
+  radio.stopListening();
+
+  bool ok = radio.write(&pIpPkt, sizeof(pIpPkt));
+  if(ok)
+    routingSend(pIpPkt);
+
+  return ok;
+}
 
 bool NetIpSnd(void* data, uint16_t len) {
   NetIpPkt pIpPkt;
   uint16_t ident;
-  ident = 1;
+  ident = id++;
 
   // First, stop listening so we can talk.
   radio.stopListening();
@@ -133,6 +173,8 @@ bool NetIpSnd(void* data, uint16_t len) {
   pIpPkt.ipHdr.checksum = checksum(&(pIpPkt.ipHdr), sizeof(pIpPkt.ipHdr));
 
   bool ok = radio.write(&pIpPkt, sizeof(pIpPkt));
+  if(ok)
+    routingSend(pIpPkt);
 
   return ok;
 }
@@ -154,7 +196,7 @@ bool NetIpRcv(void* data, uint16_t* len){
   // Describe the results
   if ( timeout )
   {
-    //printf("NetIpRcv: timeout\n\r");
+    printf("NetIpRcv: timeout\n\r");
     return false;
   }
   else
@@ -163,7 +205,8 @@ bool NetIpRcv(void* data, uint16_t* len){
     bool ok = radio.read(&pIpPkt, sizeof(pIpPkt) );
 
     if(!ok){
-      return false;
+        printf("NetIpRcv: read not ok\n\r");
+        return false;
     }
   }
 
@@ -191,15 +234,31 @@ bool NetIpRcv(void* data, uint16_t* len){
   printIp(&pIpPkt.ipHdr.src_addr);
   printf("NetIpRcv: Destination Ip: ");
   printIp(&pIpPkt.ipHdr.dest_addr);
+  printf("NetIpRcv: Id: ");
+  printf("NetIpRcv: Id: %d\r\n", pIpPkt.ipHdr.ident);
 
   if(pIpPkt.ipHdr.dest_addr == *((uint32_t*)srcIp)){
     printf("NetIpRcv: IP Pass\n\r");
-    memcpy(data, pIpPkt.data, pIpPkt.ipHdr.length);
-    *len = pIpPkt.ipHdr.length;
 
-    return true;
+    if(routingReceive(pIpPkt) == true){
+        memcpy(data, pIpPkt.data, pIpPkt.ipHdr.length);
+        *len = pIpPkt.ipHdr.length;
+        return true;
+    } else {
+        return false;
+    }
+
   } else {
     printf("NetIpRcv: IP Wrong\n\r");
+
+    if(routingSend(pIpPkt) == true){
+        printf("NetIpRcv: Resending\n\r");
+
+        // delay para teste
+        delay(50);
+        NetIpSnd(pIpPkt);
+    }
+
     return false;
   }
 
@@ -265,14 +324,95 @@ bool UdpRcv(void* data, uint16_t* len){
   return false;
 }
 
+
+#define SENT_BUFFER_SIZE 12
+#define RECEIVE_BUFFER_SIZE SENT_BUFFER_SIZE
+
+uint16_t sentBuffer[SENT_BUFFER_SIZE];
+uint16_t sentBufferIndex = 0;
+uint16_t receiveBuffer[RECEIVE_BUFFER_SIZE];
+uint32_t receiveBufferIndex = 0;
+
+/*
+    Retorna false se o pacote já foi enviado e true caso contrário
+*/
+bool routingSend(NetIpPkt packet){
+    int i;
+    bool packetWasSent = false;
+
+    for(i = 0; i<RECEIVE_BUFFER_SIZE; i++){
+            if(packet.ipHdr.ident == sentBuffer[i]){
+                packetWasSent = true;
+            }
+    }
+
+    if(packetWasSent){
+        printf("routingSend: Packet already sent\n\r");
+        return false;
+    } else {
+        printf("routingSend: Packet new\n\r");
+        sentBuffer[sentBufferIndex++] = packet.ipHdr.ident;
+        if(sentBufferIndex >= SENT_BUFFER_SIZE){
+            sentBufferIndex = 0;
+        }
+        return true;
+    }
+}
+
+/*
+    Retorna false se o pacote já foi recebido anteriormente e true caso contrário
+*/
+bool routingReceive(NetIpPkt packet){
+    int i;
+    bool packetWasReceived = false;
+
+    for(i = 0; i<RECEIVE_BUFFER_SIZE; i++){
+            if(packet.ipHdr.ident == receiveBuffer[i]){
+                packetWasReceived = true;
+            }
+    }
+
+    if(packetWasReceived){
+        printf("routingReceive: Packet already received\n\r");
+        return false;
+    } else {
+        printf("routingReceive: Packet new\n\r");
+        receiveBuffer[receiveBufferIndex++] = packet.ipHdr.ident;
+        if(receiveBufferIndex >= RECEIVE_BUFFER_SIZE){
+            receiveBufferIndex = 0;
+        }
+        return true;
+    }
+
+}
+
+
+
+
+
+
+
+
 void loop(void)
 {
 
   // Ping out role.
   if (role == role_ping_out)
   {
-    char stringToSend[] = "oi";
+    #ifdef CLIENT_NUMBER_1
+    char stringToSend[] = "oi1";
+    #endif
+    #ifdef CLIENT_NUMBER_2
+    char stringToSend[] = "oi2";
+    #endif
+    #ifdef CLIENT_NUMBER_3
+    char stringToSend[] = "oi3";
+    #endif
+    #ifdef CLIENT_NUMBER_4
+    char stringToSend[] = "oi4";
+    #endif
 
+    // TRANSMIT
     printf("Sending Message: %s\n\r", stringToSend);
 
     bool ok = UdpSnd(destPort, (uint8_t*)stringToSend, sizeof(stringToSend));
@@ -282,14 +422,21 @@ void loop(void)
     else
       printf("Send failed.\n\r");
 
-    char stringReceived[20];
-    uint16_t stringSize;
-    ok = UdpRcv(stringReceived, &stringSize);
 
-    if(ok)
-      printf("Message Received: %s\n\r", stringReceived);
-    else
-      printf("Response Not Received\n\r");
+
+
+    // // RECEIVE ACK
+    // char stringReceived[20];
+    // uint16_t stringSize;
+    // ok = UdpRcv(stringReceived, &stringSize);
+    //
+    // if(ok)
+    //   printf("Message Received: %s\n\r", stringReceived);
+    // else
+    //   printf("Response Not Received\n\r");
+
+
+
 
     printf("\n\r");
     // Try again 1s later
@@ -299,25 +446,41 @@ void loop(void)
   // Pong back role.  Receive each packet, dump it out, and send it back
   if ( role == role_pong_back )
   {
+    // RECEIVE
     char stringReceived[20];
     uint16_t stringSize;
-    while(!(UdpRcv(stringReceived, &stringSize)));
-    printf("Message Received: %s\n\r", stringReceived);
+    bool ok = UdpRcv(stringReceived, &stringSize);
+    if (ok)
+        printf("Message Received: %s\n\r", stringReceived);
 
     // Delay just a little bit to let the other unit
   	// make the transition to receiver
-  	delay(20);
+  	delay(1);
 
-    char stringToSend[] = "awn";
 
-    printf("Sending Message: %s\n\r", stringToSend);
 
-    bool ok = UdpSnd(destPort, stringToSend, sizeof(stringToSend));
 
-    if (ok)
-      printf("Send ok...\n\r");
-    else
-      printf("Send failed.\n\r\r");
+    // // TRANSMIT ACK
+    // #ifdef CLIENT_NUMBER_1
+    // char stringToSend[] = "si1";
+    // #endif
+    // #ifdef CLIENT_NUMBER_2
+    // char stringToSend[] = "si2";
+    // #endif
+    // #ifdef CLIENT_NUMBER_3
+    // char stringToSend[] = "si3";
+    // #endif
+    //
+    // printf("Sending Message: %s\n\r", stringToSend);
+    //
+    // bool ok = UdpSnd(destPort, stringToSend, sizeof(stringToSend));
+    //
+    // if (ok)
+    //   printf("Send ok...\n\r");
+    // else
+    //   printf("Send failed.\n\r\r");
+
+
 
     printf("\n\r");
   }
